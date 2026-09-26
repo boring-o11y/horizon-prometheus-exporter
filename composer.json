@@ -1,0 +1,45 @@
+{
+    "name": "boring-o11y/horizon-prometheus-exporter",
+    "description": "A Prometheus scrape endpoint for Laravel Horizon: per-queue and per-job-class counters, queue depth, wait and worker gauges, with a matching Grafana dashboard.",
+    "keywords": ["laravel", "horizon", "queue", "redis", "prometheus", "grafana", "metrics"],
+    "license": "MIT",
+    "support": {
+        "issues": "https://github.com/boring-o11y/horizon-prometheus-exporter/issues",
+        "source": "https://github.com/boring-o11y/horizon-prometheus-exporter"
+    },
+    "require": {
+        "php": "^8.1",
+        "illuminate/contracts": "^10.0|^11.0|^12.0|^13.0",
+        "illuminate/queue": "^10.0|^11.0|^12.0|^13.0",
+        "illuminate/support": "^10.0|^11.0|^12.0|^13.0",
+        "laravel/horizon": "^5.24"
+    },
+    "require-dev": {
+        "mockery/mockery": "^1.6",
+        "orchestra/testbench": "^8.14|^9.0|^10.0|^11.0",
+        "phpunit/phpunit": "^10.5|^11.0|^12.0",
+        "predis/predis": "^2.2|^3.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "BoringO11y\\HorizonPrometheusExporter\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "BoringO11y\\HorizonPrometheusExporter\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "BoringO11y\\HorizonPrometheusExporter\\HorizonPrometheusExporterServiceProvider"
+            ]
+        }
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}
