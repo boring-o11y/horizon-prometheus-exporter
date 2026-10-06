@@ -133,7 +133,7 @@ This copies `resources/grafana/horizon-dashboard.json` into your application, re
 
 ## Requirements
 
-PHP 8.1+, Laravel 10–13, Horizon 5.24+.
+PHP 8.4+, Laravel 10–13, Horizon 5.24+.
 
 ## Testing
 
