@@ -147,7 +147,8 @@ class ExporterTest extends TestCase
 
     public function test_configured_queues_are_exported_while_no_supervisor_is_running()
     {
-        config(['horizon.environments.testing.supervisor-1' => [
+        // Pinned rather than left to APP_ENV, which differs between local and CI.
+        config(['horizon.env' => 'testing', 'horizon.environments.testing.supervisor-1' => [
             'connection' => 'redis', 'queue' => ['high', 'default'], 'balance' => false, 'maxProcesses' => 3,
         ]]);
 
