@@ -15,17 +15,19 @@ class LuaScripts
      * ARGV[1] - The current time, in seconds
      * ARGV[2] - The job class
      * ARGV[3] - The queue name
+     * ARGV[4] - When the job was pushed, in seconds, or empty
      *
-     * A job whose hash has expired, or was never written, has no ready time to
-     * measure from. Counting it anyway would add a zero wait to the average, so
-     * it is left out of the sum and the count together.
+     * A job whose hash has expired is measured from when it was pushed, so the
+     * longest waits of a backlog are not the ones left out. One with neither
+     * has no time to measure from; counting it anyway would add a zero wait to
+     * the average, so it is left out of the sum and the count together.
      *
      * @return string
      */
     public static function recordWait()
     {
         return <<<'LUA'
-local updated = tonumber(redis.call('hget', KEYS[1], 'updated_at'))
+local updated = tonumber(redis.call('hget', KEYS[1], 'updated_at')) or tonumber(ARGV[4])
 
 if not updated then
     return 0

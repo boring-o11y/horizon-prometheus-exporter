@@ -69,7 +69,7 @@ Scrape **one** web server, not all of them. Every instance reads the same Redis,
 
 ## Metrics
 
-All names start with `horizon_` (set `HORIZON_PROMETHEUS_PREFIX` to change it).
+All names start with `horizon_` (set `HORIZON_PROMETHEUS_PREFIX` to change it). The prefix can't be empty: unprefixed `up` and `scrape_duration_seconds` would collide with the series Prometheus adds to every target, so an empty value falls back to `horizon`.
 
 | Metric | Type | Labels |
 |---|---|---|
@@ -94,6 +94,7 @@ Things to know about the labels:
 
 - **Job classes are labelled `job_class`, not `job`.** Prometheus reserves `job` for the scrape config's `job_name`, and a target's own `job` label would come back renamed to `exported_job`.
 - **Every `queue` label names one queue.** A supervisor that balances `high,default` as one pool is exported as two queues, each labelled with `group="high,default"`, so they line up with the per-queue counters. `queue_processes` repeats the pool's size on each of its queues, so use `max by (group)` before summing across the fleet. `queue_time_to_clear_seconds` is each queue's share of the pool's estimate, so `sum by (group)` gives the pool's total.
+- **Queues stay visible while the workers are down.** Besides the pools running supervisors report, the queues Horizon is configured to run in this environment are exported with `queue_processes` at 0, so a backlog alert still fires when every worker has stopped.
 - **One queue can belong to two pools.** In that case it has two series, so collapse them with `max by (queue, connection)` before summing.
 
 Useful queries:

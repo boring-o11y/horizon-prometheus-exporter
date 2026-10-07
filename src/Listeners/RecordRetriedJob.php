@@ -4,7 +4,10 @@ namespace BoringO11y\HorizonPrometheusExporter\Listeners;
 
 use BoringO11y\HorizonPrometheusExporter\Counters;
 use Illuminate\Queue\Events\JobReleasedAfterException;
+use Illuminate\Queue\Jobs\RedisJob;
+use Illuminate\Support\Str;
 use Laravel\Horizon\JobPayload;
+use Laravel\Horizon\RedisQueue;
 
 class RecordRetriedJob
 {
@@ -26,15 +29,27 @@ class RecordRetriedJob
      * is doing what it was written to do, and counting those would bury the
      * retries in noise.
      *
+     * This is Laravel's event rather than Horizon's, so it also fires for jobs
+     * on other drivers; only Horizon's are counted, under the queue name
+     * Horizon's own events carry.
+     *
      * @param  \Illuminate\Queue\Events\JobReleasedAfterException  $event
      * @return void
      */
     public function handle(JobReleasedAfterException $event)
     {
-        if (! $name = (new JobPayload($event->job->getRawBody()))->displayName()) {
+        $job = $event->job;
+
+        if (! $job instanceof RedisJob || ! $job->getRedisQueue() instanceof RedisQueue) {
             return;
         }
 
-        $this->counters->retried($name, $event->job->getQueue());
+        if (! $name = (new JobPayload($job->getRawBody()))->displayName()) {
+            return;
+        }
+
+        $queue = Str::replaceFirst('queues:', '', $job->getRedisQueue()->getQueue($job->getQueue()));
+
+        $this->counters->retried($name, $queue);
     }
 }

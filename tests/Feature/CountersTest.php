@@ -8,8 +8,13 @@ use BoringO11y\HorizonPrometheusExporter\Tests\Fixtures\FailingJob;
 use BoringO11y\HorizonPrometheusExporter\Tests\Fixtures\ReleasingJob;
 use BoringO11y\HorizonPrometheusExporter\Tests\Fixtures\RetryingJob;
 use BoringO11y\HorizonPrometheusExporter\Tests\TestCase;
+use Illuminate\Contracts\Queue\Job;
+use Illuminate\Queue\Events\JobReleasedAfterException;
 use Illuminate\Support\Facades\Queue;
+use Laravel\Horizon\Contracts\JobRepository;
 use Laravel\Horizon\Contracts\MetricsRepository;
+use Mockery;
+use RuntimeException;
 
 class CountersTest extends TestCase
 {
@@ -108,20 +113,46 @@ class CountersTest extends TestCase
         $this->assertEqualsWithDelta(5.0, $counters['queue']['default']['wait_seconds'], 1.0);
     }
 
-    public function test_a_job_without_a_hash_is_left_out_of_the_wait()
+    public function test_a_job_whose_hash_has_expired_is_measured_from_when_it_was_pushed()
     {
         $id = Queue::push(new BasicJob);
 
+        // Horizon expires the pending hash after its retention, which a long
+        // backlog outlives; those are the waits the average must not lose.
         app(Counters::class)->connection()->del($id);
 
         $this->work();
 
         $counters = app(Counters::class)->all();
 
-        // Counted as throughput, but not averaged in as a zero wait.
         $this->assertSame(1, $counters['job'][BasicJob::class]['processed']);
-        $this->assertArrayNotHasKey('waits', $counters['job'][BasicJob::class]);
-        $this->assertArrayNotHasKey('wait_seconds', $counters['job'][BasicJob::class]);
+        $this->assertSame(1, $counters['job'][BasicJob::class]['waits']);
+        $this->assertEqualsWithDelta(0.0, $counters['job'][BasicJob::class]['wait_seconds'], 1.0);
+    }
+
+    public function test_a_failing_counter_write_does_not_disturb_the_job()
+    {
+        $counters = Mockery::mock(Counters::class.'[connection]', [app('redis')]);
+        $counters->shouldReceive('connection')->andThrow(new RuntimeException('READONLY'));
+        $this->app->instance(Counters::class, $counters);
+
+        Queue::push(new BasicJob);
+
+        $this->work();
+
+        // Horizon's own listeners, which run after this package's, still ran.
+        $this->assertSame(1, app(JobRepository::class)->countCompleted());
+        $this->assertSame(0, app('redis')->connection()->zcard('queues:default:reserved'));
+    }
+
+    public function test_a_retry_on_another_driver_is_not_counted()
+    {
+        $job = Mockery::mock(Job::class);
+        $job->shouldReceive('getRawBody')->never();
+
+        event(new JobReleasedAfterException('sqs', $job));
+
+        $this->assertSame(['job' => [], 'queue' => []], app(Counters::class)->all());
     }
 
     public function test_the_counters_live_under_horizons_prefix()

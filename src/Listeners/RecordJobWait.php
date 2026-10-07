@@ -33,6 +33,6 @@ class RecordJobWait
             return;
         }
 
-        $this->counters->waited($event->payload->id(), $name, $event->queue);
+        $this->counters->waited($event->payload->id(), $name, $event->queue, $event->payload->decoded['pushedAt'] ?? null);
     }
 }

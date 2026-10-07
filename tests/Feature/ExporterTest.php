@@ -145,6 +145,24 @@ class ExporterTest extends TestCase
         );
     }
 
+    public function test_configured_queues_are_exported_while_no_supervisor_is_running()
+    {
+        config(['horizon.environments.testing.supervisor-1' => [
+            'connection' => 'redis', 'queue' => ['high', 'default'], 'balance' => false, 'maxProcesses' => 3,
+        ]]);
+
+        Queue::push(new BasicJob);
+
+        $body = $this->scrape();
+
+        // Every worker is down, which is exactly when the backlog matters.
+        $labels = '{queue="default",connection="redis",group="high,default"}';
+
+        $this->assertStringContainsString('horizon_queue_length'.$labels.' 1', $body);
+        $this->assertStringContainsString('horizon_queue_processes'.$labels.' 0', $body);
+        $this->assertStringContainsString('horizon_up 0', $body);
+    }
+
     public function test_the_oldest_pending_age_is_measured_from_when_the_job_became_ready()
     {
         $this->fakeSupervisors(['redis:default' => 1]);
@@ -231,6 +249,15 @@ class ExporterTest extends TestCase
         $this->assertStringNotContainsString('start_time_seconds', $body);
     }
 
+    public function test_no_master_supervisors_is_down_whatever_the_repository_returns()
+    {
+        $masters = Mockery::mock(MasterSupervisorRepository::class);
+        $masters->shouldReceive('all')->andReturn((fn () => yield from [])());
+        $this->app->instance(MasterSupervisorRepository::class, $masters);
+
+        $this->assertStringContainsString('horizon_up 0', $this->scrape());
+    }
+
     public function test_scraping_does_not_write_to_redis()
     {
         $this->fakeSupervisors(['redis:default' => 1]);
@@ -261,6 +288,18 @@ class ExporterTest extends TestCase
 
         $this->assertStringContainsString('queues_jobs{status="pending"} ', $body);
         $this->assertStringNotContainsString('horizon_jobs{', $body);
+    }
+
+    public function test_an_empty_prefix_falls_back_rather_than_clashing_with_prometheus()
+    {
+        config(['horizon-prometheus.prefix' => '']);
+
+        $body = $this->scrape();
+
+        // Unprefixed, these would collide with the series Prometheus adds to
+        // every target itself.
+        $this->assertStringContainsString('horizon_up ', $body);
+        $this->assertDoesNotMatchRegularExpression('/^(up|scrape_duration_seconds) /m', $body);
     }
 
     public function test_an_application_metrics_repository_is_read_through_the_contract()

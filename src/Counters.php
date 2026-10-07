@@ -4,6 +4,7 @@ namespace BoringO11y\HorizonPrometheusExporter;
 
 use Illuminate\Contracts\Redis\Factory as RedisFactory;
 use Illuminate\Support\Arr;
+use Throwable;
 
 /**
  * The never-reset counters the exporter reads.
@@ -17,6 +18,10 @@ use Illuminate\Support\Arr;
  * Each family is one hash keyed by job class or queue name, so a scrape reads a
  * fixed number of keys whatever the cardinality, and there is no registry to
  * keep in step with the data.
+ *
+ * The writes run inside the worker, ahead of Horizon's own listeners, so a
+ * failing write is reported and dropped: a lost count is cheaper than a job
+ * left reserved or Horizon's bookkeeping skipped.
  */
 class Counters
 {
@@ -95,14 +100,18 @@ class Counters
      * read and the increments are one script so the pickup costs one round
      * trip.
      *
+     * A job whose hash has expired, which a backlog older than Horizon's
+     * pending retention outlives, is measured from when it was pushed instead.
+     *
      * @param  string  $id
      * @param  string  $job
      * @param  string  $queue
+     * @param  float|int|string|null  $pushedAt
      * @return void
      */
-    public function waited($id, $job, $queue)
+    public function waited($id, $job, $queue, $pushedAt = null)
     {
-        $this->connection()->eval(
+        $this->quietly(fn () => $this->connection()->eval(
             LuaScripts::recordWait(), 5,
             $id,
             $this->key('job', 'waits'),
@@ -111,8 +120,9 @@ class Counters
             $this->key('queue', 'wait_seconds'),
             sprintf('%.6F', microtime(true)),
             $job,
-            $queue
-        );
+            $queue,
+            (string) $pushedAt
+        ));
     }
 
     /**
@@ -125,10 +135,25 @@ class Counters
      */
     protected function increment($family, $job, $queue)
     {
-        $this->connection()->pipeline(function ($pipe) use ($family, $job, $queue) {
+        $this->quietly(fn () => $this->connection()->pipeline(function ($pipe) use ($family, $job, $queue) {
             $pipe->hincrby($this->key('job', $family), $job, 1);
             $pipe->hincrby($this->key('queue', $family), $queue, 1);
-        });
+        }));
+    }
+
+    /**
+     * Run a write, reporting rather than throwing if it fails.
+     *
+     * @param  callable  $callback
+     * @return void
+     */
+    protected function quietly(callable $callback)
+    {
+        try {
+            $callback();
+        } catch (Throwable $e) {
+            report($e);
+        }
     }
 
     /**

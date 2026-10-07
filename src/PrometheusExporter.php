@@ -4,12 +4,13 @@ namespace BoringO11y\HorizonPrometheusExporter;
 
 use Illuminate\Contracts\Queue\Factory as QueueFactory;
 use Illuminate\Contracts\Redis\Factory as RedisFactory;
+use Illuminate\Support\Str;
 use Laravel\Horizon\Contracts\JobRepository;
 use Laravel\Horizon\Contracts\MasterSupervisorRepository;
 use Laravel\Horizon\Contracts\MetricsRepository;
 use Laravel\Horizon\Contracts\SupervisorRepository;
+use Laravel\Horizon\ProvisioningPlan;
 use Laravel\Horizon\Repositories\RedisMetricsRepository;
-use Laravel\Horizon\WaitTimeCalculator;
 use Throwable;
 
 /**
@@ -40,7 +41,6 @@ class PrometheusExporter
         protected SupervisorRepository $supervisors,
         protected MasterSupervisorRepository $masters,
         protected QueueFactory $queue,
-        protected WaitTimeCalculator $waitTime,
         protected RedisFactory $redis,
     ) {
     }
@@ -54,7 +54,9 @@ class PrometheusExporter
     {
         $startedAt = microtime(true);
 
-        $registry = new MetricRegistry(config('horizon-prometheus.prefix', 'horizon'));
+        // Never unprefixed: the export includes "up" and "scrape_duration_seconds",
+        // which would collide with the series Prometheus adds to every target.
+        $registry = new MetricRegistry(trim((string) config('horizon-prometheus.prefix', 'horizon')) ?: 'horizon');
 
         $counters = $this->counters->all();
         // Read once and walked twice, so a repository that yields its rows
@@ -63,8 +65,8 @@ class PrometheusExporter
         $pools = $this->pools($supervisors);
 
         $this->collectMeasurements($registry, 'job', 'job_class', $counters['job'], $this->metrics->measuredJobs());
-        $this->collectMeasurements($registry, 'queue', 'queue', $counters['queue'], $this->metrics->measuredQueues());
-        $this->collectWorkload($registry, $pools);
+        $runtimes = $this->collectMeasurements($registry, 'queue', 'queue', $counters['queue'], $this->metrics->measuredQueues());
+        $this->collectWorkload($registry, $pools, $runtimes);
         $this->collectJobCounts($registry);
         $this->collectSupervisors($registry, $supervisors);
         $this->collectSummary($registry);
@@ -86,7 +88,7 @@ class PrometheusExporter
      * @param  string  $label
      * @param  array<string, array<string, int|float>>  $counters
      * @param  array<int, string>  $measured
-     * @return void
+     * @return array<string, float|null>
      */
     protected function collectMeasurements(MetricRegistry $registry, $scope, $label, array $counters, array $measured)
     {
@@ -114,6 +116,8 @@ class PrometheusExporter
             $registry->summary($scope.'_wait_seconds', "Time {$noun} waited on the queue before a worker picked them up, in seconds. Divide rate(_sum) by rate(_count) for the average over a range.", $count['wait_seconds'] ?? 0.0, $count['waits'] ?? 0, $labels);
             $registry->gauge($scope.'_runtime_seconds', "Moving average runtime of {$noun} in seconds, as shown on Horizon's metrics screen.", $this->seconds($runtimes[$name] ?? null), $labels);
         }
+
+        return $runtimes;
     }
 
     /**
@@ -209,25 +213,32 @@ class PrometheusExporter
      *
      * This reads the pools off the running supervisors itself rather than
      * through Horizon's workload repository, whose rows drop the connection a
-     * queue belongs to.
+     * queue belongs to. The pools Horizon is configured to run are added with
+     * no processes, so a backlog stays visible while every worker is down.
      *
      * @param  \BoringO11y\HorizonPrometheusExporter\MetricRegistry  $registry
      * @param  array<string, int>  $pools
+     * @param  array<string, float|null>  $runtimes
      * @return void
      */
-    protected function collectWorkload(MetricRegistry $registry, array $pools)
+    protected function collectWorkload(MetricRegistry $registry, array $pools, array $runtimes)
     {
+        $pools += $this->configuredPools();
+
+        ksort($pools);
+
         foreach ($pools as $pool => $processes) {
             [$connection, $group] = $this->splitPool($pool);
 
             foreach (explode(',', $group) as $name) {
                 $labels = ['queue' => $name, 'connection' => $connection, 'group' => $group];
+                $length = $this->length($connection, $name);
 
-                $registry->gauge('queue_length', 'Number of jobs ready to run on this queue.', $this->length($connection, $name), $labels);
+                $registry->gauge('queue_length', 'Number of jobs ready to run on this queue.', $length, $labels);
                 $registry->gauge('queue_oldest_pending_seconds', 'How long the job at the head of this queue has been ready to run, in seconds.', $this->oldestPendingAge($connection, $name), $labels);
                 $registry->gauge('queue_processes', 'Number of worker processes able to pick up this queue\'s jobs. Queues sharing a process pool each report the whole pool, so deduplicate with "max by (group)" before totalling the fleet.', $processes, $labels);
                 $registry->gauge('queue_paused', 'Whether this queue is paused with queue:pause (1) or being processed (0).', $this->paused($connection, $name), $labels);
-                $registry->gauge('queue_time_to_clear_seconds', 'Estimated number of seconds needed to clear this queue at its current runtime. For a queue balanced in a group this is its share of the group estimate — its own backlog against the shared pool — so the group is "sum by (group)".', $this->timeToClear($connection, $name, $processes), $labels);
+                $registry->gauge('queue_time_to_clear_seconds', 'Estimated number of seconds needed to clear this queue at its current runtime. For a queue balanced in a group this is its share of the group estimate — its own backlog against the shared pool — so the group is "sum by (group)".', $this->timeToClear($length, $runtimes[$name] ?? null, $processes), $labels);
             }
         }
     }
@@ -248,9 +259,41 @@ class PrometheusExporter
             }
         }
 
-        ksort($pools);
-
         return $pools;
+    }
+
+    /**
+     * Get the pools Horizon's configuration runs in this environment.
+     *
+     * Keyed the way a running supervisor reports them, so a configured pool
+     * and a live one are the same series.
+     *
+     * @return array<string, int>
+     */
+    protected function configuredPools()
+    {
+        return $this->quietly(function () {
+            $environment = config('horizon.env') ?? config('app.env');
+
+            $supervisors = collect(ProvisioningPlan::get('prometheus')->toSupervisorOptions())
+                ->first(fn ($_, $name) => Str::is($name, $environment)) ?? [];
+
+            $pools = [];
+
+            foreach ($supervisors as $options) {
+                if (! $options->queue || $options->maxProcesses <= 0) {
+                    continue;
+                }
+
+                $groups = $options->balancing() ? explode(',', $options->queue) : [$options->queue];
+
+                foreach ($groups as $group) {
+                    $pools[$options->connection.':'.$group] = 0;
+                }
+            }
+
+            return $pools;
+        }) ?? [];
     }
 
     /**
@@ -301,7 +344,13 @@ class PrometheusExporter
                 return null;
             }
 
-            $payload = $driver->getConnection()->lindex($driver->getQueue($queue), 0);
+            // The same key Horizon's readyNow() reads: on a cluster a newer
+            // Laravel hash-tags the queue name, which getQueue() does not.
+            $key = method_exists($driver, 'getQueueRedisKey')
+                ? (fn () => $this->getQueueRedisKey($queue))->call($driver)
+                : $driver->getQueue($queue);
+
+            $payload = $driver->getConnection()->lindex($key, 0);
 
             if (! $payload) {
                 return 0;
@@ -340,14 +389,23 @@ class PrometheusExporter
     /**
      * Get the estimated time to clear one queue of a pool.
      *
-     * @param  string  $connection
-     * @param  string  $queue
+     * Horizon's WaitTimeCalculator arithmetic, on the length and runtime this
+     * scrape has already read rather than reading both again.
+     *
+     * @param  int|null  $length
+     * @param  float|null  $runtime
      * @param  int  $processes
      * @return float|null
      */
-    protected function timeToClear($connection, $queue, $processes)
+    protected function timeToClear($length, $runtime, $processes)
     {
-        return $this->quietly(fn () => (float) $this->waitTime->calculateTimeToClear($connection, $queue, $processes));
+        if (is_null($length)) {
+            return null;
+        }
+
+        $milliseconds = $length * ($runtime ?? 0);
+
+        return (float) round(($processes > 0 ? $milliseconds / $processes : $milliseconds) / 1000);
     }
 
     /**
@@ -380,7 +438,7 @@ class PrometheusExporter
     {
         $processes = 0;
 
-        $masters = $this->masters->all();
+        $masters = [...$this->masters->all()];
 
         foreach ($masters as $master) {
             $registry->gauge(
