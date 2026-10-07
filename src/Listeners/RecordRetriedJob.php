@@ -4,6 +4,7 @@ namespace BoringO11y\HorizonPrometheusExporter\Listeners;
 
 use BoringO11y\HorizonPrometheusExporter\Counters;
 use Illuminate\Queue\Events\JobReleasedAfterException;
+use Laravel\Horizon\JobPayload;
 
 class RecordRetriedJob
 {
@@ -30,9 +31,7 @@ class RecordRetriedJob
      */
     public function handle(JobReleasedAfterException $event)
     {
-        $payload = json_decode($event->job->getRawBody(), true);
-
-        if (! $name = $payload['displayName'] ?? null) {
+        if (! $name = (new JobPayload($event->job->getRawBody()))->displayName()) {
             return;
         }
 

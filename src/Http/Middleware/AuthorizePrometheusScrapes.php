@@ -46,16 +46,16 @@ class AuthorizePrometheusScrapes
      */
     protected function allows($ip)
     {
-        $allowed = array_values(array_filter(
-            array_map('trim', (array) config('horizon-prometheus.allowed_ips', ['127.0.0.1', '::1'])),
+        $allowed = array_filter(
+            array_map('trim', (array) config('horizon-prometheus.allowed_ips')),
             fn ($entry) => $entry !== '',
-        ));
+        );
 
         if (in_array('*', $allowed, true)) {
             return true;
         }
 
-        if (empty($allowed) || is_null($ip)) {
+        if (is_null($ip)) {
             return false;
         }
 

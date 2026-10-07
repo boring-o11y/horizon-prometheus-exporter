@@ -107,6 +107,17 @@ abstract class TestCase extends BaseTestCase
     }
 
     /**
+     * Request the endpoint from the given client address.
+     *
+     * @param  string  $ip
+     * @return \Illuminate\Testing\TestResponse
+     */
+    protected function scrapeFrom($ip)
+    {
+        return $this->withServerVariables(['REMOTE_ADDR' => $ip])->get('/horizon/prometheus');
+    }
+
+    /**
      * Escape a class name the way it appears in a label value.
      *
      * @param  string  $class

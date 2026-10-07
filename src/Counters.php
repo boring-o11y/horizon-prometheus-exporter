@@ -3,6 +3,7 @@
 namespace BoringO11y\HorizonPrometheusExporter;
 
 use Illuminate\Contracts\Redis\Factory as RedisFactory;
+use Illuminate\Support\Arr;
 
 /**
  * The never-reset counters the exporter reads.
@@ -39,21 +40,12 @@ class Counters
     public const SCOPES = ['job', 'queue'];
 
     /**
-     * The Redis factory implementation.
-     *
-     * @var \Illuminate\Contracts\Redis\Factory
-     */
-    protected $redis;
-
-    /**
      * Create a new counters instance.
      *
-     * @param  \Illuminate\Contracts\Redis\Factory  $redis
      * @return void
      */
-    public function __construct(RedisFactory $redis)
+    public function __construct(protected RedisFactory $redis)
     {
-        $this->redis = $redis;
     }
 
     /**
@@ -146,23 +138,17 @@ class Counters
      */
     public function all()
     {
-        $keys = [];
+        $families = $this->families();
 
-        foreach (self::SCOPES as $scope) {
-            foreach (self::FAMILIES as $family) {
-                $keys[] = [$scope, $family];
-            }
-        }
-
-        $raw = $this->connection()->pipeline(function ($pipe) use ($keys) {
-            foreach ($keys as [$scope, $family]) {
+        $raw = $this->connection()->pipeline(function ($pipe) use ($families) {
+            foreach ($families as [$scope, $family]) {
                 $pipe->hgetall($this->key($scope, $family));
             }
         });
 
         $result = ['job' => [], 'queue' => []];
 
-        foreach ($keys as $i => [$scope, $family]) {
+        foreach ($families as $i => [$scope, $family]) {
             foreach ((array) ($raw[$i] ?: []) as $name => $value) {
                 $result[$scope][$name][$family] = $family === 'wait_seconds' ? (float) $value : (int) $value;
             }
@@ -178,22 +164,24 @@ class Counters
      */
     public function clear()
     {
-        $keys = [];
-
-        foreach (self::SCOPES as $scope) {
-            foreach (self::FAMILIES as $family) {
-                $keys[] = $this->key($scope, $family);
-            }
-        }
-
         // One DEL per key rather than one multi-key DEL: on a cluster the keys
         // share a slot only through Horizon's hash-tagged prefix, and a single
         // key never has to.
-        $this->connection()->pipeline(function ($pipe) use ($keys) {
-            foreach ($keys as $key) {
-                $pipe->del($key);
+        $this->connection()->pipeline(function ($pipe) {
+            foreach ($this->families() as [$scope, $family]) {
+                $pipe->del($this->key($scope, $family));
             }
         });
+    }
+
+    /**
+     * Get every scope and family pair a counter is kept for.
+     *
+     * @return array<int, array{0: string, 1: string}>
+     */
+    protected function families()
+    {
+        return Arr::crossJoin(self::SCOPES, self::FAMILIES);
     }
 
     /**
