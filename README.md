@@ -146,6 +146,10 @@ This copies `resources/grafana/horizon-dashboard.json` into your application, re
 
 PHP 8.4+, Laravel 10–13, Horizon 5.24+.
 
+## Background
+
+[Laravel Horizon in Prometheus: Why Exported Throughput Reads Low](https://boring-observability.dev/blog/laravel-horizon-prometheus-grafana) explains the problem this exporter was built to fix.
+
 ## Testing
 
 ```bash
