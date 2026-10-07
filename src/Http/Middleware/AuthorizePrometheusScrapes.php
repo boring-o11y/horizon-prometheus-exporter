@@ -46,8 +46,10 @@ class AuthorizePrometheusScrapes
      */
     protected function allows($ip)
     {
+        // Normalized here rather than in the config file, so a published or
+        // runtime-set list with stray blanks is read the same way.
         $allowed = array_filter(
-            array_map('trim', (array) config('horizon-prometheus.allowed_ips')),
+            array_map('trim', (array) config('horizon-prometheus.allowed_ips', ['127.0.0.1', '::1'])),
             fn ($entry) => $entry !== '',
         );
 

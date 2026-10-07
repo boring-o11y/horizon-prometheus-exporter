@@ -64,7 +64,7 @@ class HorizonPrometheusExporterServiceProvider extends ServiceProvider
     {
         // Opt in only: an application that has not asked for a metrics endpoint
         // should not have one, nor pay for counters nobody reads.
-        if (! config('horizon-prometheus.enabled')) {
+        if (! config('horizon-prometheus.enabled', false)) {
             return;
         }
 
@@ -110,7 +110,7 @@ class HorizonPrometheusExporterServiceProvider extends ServiceProvider
             'prefix' => $this->path(),
             'middleware' => array_merge(
                 [AuthorizePrometheusScrapes::class],
-                (array) config('horizon-prometheus.middleware')
+                (array) config('horizon-prometheus.middleware', [])
             ),
         ], function () {
             $this->loadRoutesFrom(__DIR__.'/../routes/prometheus.php');

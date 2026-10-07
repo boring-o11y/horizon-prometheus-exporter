@@ -18,12 +18,12 @@ horizon_queue_length{queue="high",connection="redis",group="high,default"} 12
 
 [spatie/laravel-prometheus](https://github.com/spatie/laravel-prometheus) has Horizon collectors too. They read Horizon's dashboard figures as gauges at scrape time. That is enough to see whether Horizon is running and whether a backlog is growing, but not to graph throughput or alert on failures:
 
-- **Its throughput and failure figures are windows, not counters.** `horizon_jobs_per_minute` and `horizon_failed_recent_jobs` come from Horizon's own metrics and recent-jobs lists, which Horizon resets and trims. You can't `rate()` or `increase()` them, so "more than 10 failures in 15 minutes" can't be expressed reliably. This package keeps its own counters, which only go up.
+- **Its throughput and failure figures are windows, not counters.** `app_horizon_jobs_per_minute` and `app_horizon_failed_recent_jobs` come from Horizon's own metrics and recent-jobs lists, which Horizon resets and trims. You can't `rate()` or `increase()` them, so "more than 10 failures in 15 minutes" can't be expressed reliably. This package keeps its own counters, which only go up.
 - **It has nothing per job class, and no retries, wait time, runtime or age of the oldest pending job.** Those are what you need to find which job is slow or failing, and to alert on queue latency rather than just queue length.
 - **Its scrapes can write to Redis.** Its jobs-per-minute collector calls Horizon's `jobsProcessedPerMinute()`, which stores a timestamp when none is set and so shifts the window Horizon's dashboard measures against. Scraping this package never writes.
 - **A balanced pool is exported as one queue.** A supervisor running `high,default` with `balance => false` is labelled `queue="high,default"`. This package exports one series per queue, with the pool in a `group` label, so queue depth lines up with the per-queue counters.
 
-What spatie gets from reading at scrape time is that it costs nothing in the workers. This package costs one Redis round trip per job outcome and one per pickup. spatie is also a general-purpose Prometheus library for your own application metrics. The two can run side by side: they use different routes and metric prefixes.
+What spatie gets from reading at scrape time is that it costs nothing in the workers. This package costs one Redis round trip per job outcome and one per pickup. spatie is also a general-purpose Prometheus library for your own application metrics. The two can run side by side: they use different routes, and spatie's metrics carry its `app_` namespace, so the series don't collide.
 
 ## Install
 

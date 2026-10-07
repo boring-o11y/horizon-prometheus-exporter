@@ -181,7 +181,9 @@ class Counters
      */
     protected function families()
     {
-        return Arr::crossJoin(self::SCOPES, self::FAMILIES);
+        static $families;
+
+        return $families ??= Arr::crossJoin(self::SCOPES, self::FAMILIES);
     }
 
     /**

@@ -3,6 +3,7 @@
 namespace BoringO11y\HorizonPrometheusExporter;
 
 use Illuminate\Contracts\Queue\Factory as QueueFactory;
+use Illuminate\Contracts\Redis\Factory as RedisFactory;
 use Laravel\Horizon\Contracts\JobRepository;
 use Laravel\Horizon\Contracts\MasterSupervisorRepository;
 use Laravel\Horizon\Contracts\MetricsRepository;
@@ -40,6 +41,7 @@ class PrometheusExporter
         protected MasterSupervisorRepository $masters,
         protected QueueFactory $queue,
         protected WaitTimeCalculator $waitTime,
+        protected RedisFactory $redis,
     ) {
     }
 
@@ -52,17 +54,19 @@ class PrometheusExporter
     {
         $startedAt = microtime(true);
 
-        $registry = new MetricRegistry(config('horizon-prometheus.prefix'));
+        $registry = new MetricRegistry(config('horizon-prometheus.prefix', 'horizon'));
 
         $counters = $this->counters->all();
-        $supervisors = $this->supervisors->all();
+        // Read once and walked twice, so a repository that yields its rows
+        // must not be left exhausted after the first pass.
+        $supervisors = [...$this->supervisors->all()];
         $pools = $this->pools($supervisors);
 
         $this->collectMeasurements($registry, 'job', 'job_class', $counters['job'], $this->metrics->measuredJobs());
         $this->collectMeasurements($registry, 'queue', 'queue', $counters['queue'], $this->metrics->measuredQueues());
         $this->collectWorkload($registry, $pools);
         $this->collectJobCounts($registry);
-        $this->collectSupervisors($registry, $supervisors, array_sum($pools));
+        $this->collectSupervisors($registry, $supervisors);
         $this->collectSummary($registry);
 
         $registry->gauge(
@@ -175,16 +179,16 @@ class PrometheusExporter
     protected function runtimesThroughTheContract($scope, array $names)
     {
         [$runtimeFor, $snapshotsFor] = $scope === 'job'
-            ? ['runtimeForJob', 'snapshotsForJob']
-            : ['runtimeForQueue', 'snapshotsForQueue'];
+            ? [$this->metrics->runtimeForJob(...), $this->metrics->snapshotsForJob(...)]
+            : [$this->metrics->runtimeForQueue(...), $this->metrics->snapshotsForQueue(...)];
 
         $result = [];
 
         foreach ($names as $name) {
-            $runtime = $this->metrics->{$runtimeFor}($name);
+            $runtime = $runtimeFor($name);
 
             if (! $runtime) {
-                $snapshots = $this->metrics->{$snapshotsFor}($name);
+                $snapshots = $snapshotsFor($name);
 
                 $runtime = end($snapshots)->runtime ?? $runtime;
             }
@@ -231,10 +235,10 @@ class PrometheusExporter
     /**
      * Get the number of worker processes in each pool, across every supervisor.
      *
-     * @param  iterable<int, \stdClass>  $supervisors
+     * @param  array<int, \stdClass>  $supervisors
      * @return array<string, int>
      */
-    protected function pools(iterable $supervisors)
+    protected function pools(array $supervisors)
     {
         $pools = [];
 
@@ -306,7 +310,7 @@ class PrometheusExporter
             $payload = json_decode($payload, true);
 
             $readyAt = ($id = $payload['id'] ?? $payload['uuid'] ?? null)
-                ? $this->counters->connection()->hget($id, 'updated_at')
+                ? $this->redis->connection('horizon')->hget($id, 'updated_at')
                 : null;
 
             $readyAt = $readyAt ?: ($payload['pushedAt'] ?? null);
@@ -369,12 +373,13 @@ class PrometheusExporter
      * Collect the state of the master supervisors and their worker pools.
      *
      * @param  \BoringO11y\HorizonPrometheusExporter\MetricRegistry  $registry
-     * @param  iterable<int, \stdClass>  $supervisors
-     * @param  int  $processes
+     * @param  array<int, \stdClass>  $supervisors
      * @return void
      */
-    protected function collectSupervisors(MetricRegistry $registry, iterable $supervisors, $processes)
+    protected function collectSupervisors(MetricRegistry $registry, array $supervisors)
     {
+        $processes = 0;
+
         $masters = $this->masters->all();
 
         foreach ($masters as $master) {
@@ -396,6 +401,8 @@ class PrometheusExporter
 
             foreach ((array) $supervisor->processes as $pool => $count) {
                 [$connection, $group] = $this->splitPool($pool);
+
+                $processes += (int) $count;
 
                 // The pool key is the group a supervisor balances as a unit,
                 // so this is labelled "group" like the workload metrics — a

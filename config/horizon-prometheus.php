@@ -52,9 +52,7 @@ return [
     |
     */
 
-    'allowed_ips' => array_filter(array_map('trim', explode(
-        ',', (string) env('HORIZON_PROMETHEUS_ALLOWED_IPS', '127.0.0.1,::1')
-    ))),
+    'allowed_ips' => explode(',', (string) env('HORIZON_PROMETHEUS_ALLOWED_IPS', '127.0.0.1,::1')),
 
     // Additional middleware to apply to the scrape endpoint. The IP allowlist
     // is always applied, ahead of anything listed here.
