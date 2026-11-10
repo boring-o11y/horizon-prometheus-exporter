@@ -2,6 +2,7 @@
     "name": "boring-o11y/horizon-prometheus-exporter",
     "description": "A Prometheus scrape endpoint for Laravel Horizon: per-queue and per-job-class counters, queue depth, wait and worker gauges, with a matching Grafana dashboard.",
     "keywords": ["laravel", "horizon", "queue", "redis", "prometheus", "grafana", "metrics"],
+    "homepage": "https://boring-observability.dev/open-source/horizon-prometheus-exporter",
     "license": "MIT",
     "support": {
         "issues": "https://github.com/boring-o11y/horizon-prometheus-exporter/issues",
